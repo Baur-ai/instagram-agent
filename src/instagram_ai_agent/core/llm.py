@@ -349,6 +349,45 @@ def _strip_cot(text: str) -> str:
     return ""
 
 
+
+# ─── Content language (patch by Bars Consult) ─────────────────────────────
+# niche.yaml already had a `language` field that nothing read. This makes it
+# work: every LLM call gets a language rule, so captions, slides, hooks,
+# voice-over scripts and comment replies come out in the configured language,
+# while JSON keys and image prompts stay in English.
+_LANG_NAMES = {
+    "en": "English", "ru": "Russian", "kk": "Kazakh", "kz": "Kazakh",
+    "ru+kk": "Russian, with natural short Kazakh phrases where they fit",
+    "kk+ru": "Kazakh, with Russian where it reads more naturally",
+}
+_lang_cache: str | None = None
+
+
+def _language_directive() -> str:
+    global _lang_cache
+    if _lang_cache is None:
+        lang = (os.environ.get("IG_CONTENT_LANGUAGE") or "").strip()
+        if not lang:
+            try:
+                from instagram_ai_agent.core.config import load_niche
+                lang = (load_niche().language or "en").strip()
+            except Exception:
+                lang = "en"
+        name = _LANG_NAMES.get(lang.lower(), lang)
+        if name.lower() in ("en", "english", ""):
+            _lang_cache = ""
+        else:
+            _lang_cache = (
+                f"\nLANGUAGE RULE: write every piece of audience-facing text "
+                f"(captions, hooks, slide and overlay text, quotes, CTAs, story text, "
+                f"voice-over scripts, comment and DM replies) in {name}. "
+                f"When replying to a comment or DM, answer in the language the person used. "
+                f"Keep JSON keys, field names, enum values and image-generation prompts in English. "
+                f"Hashtags may mix {name} and English."
+            )
+    return _lang_cache
+
+
 async def generate(
     task: Task,
     prompt: str,
@@ -361,6 +400,7 @@ async def generate(
     """Generate text for a task. Tries each endpoint in the chain until one succeeds."""
     chain = ROUTES[task]
     messages: list[dict[str, Any]] = []
+    system = ((system or "") + _language_directive()).strip() or None
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
@@ -512,6 +552,7 @@ async def generate_json_model(
         (system or "")
         + "\nReturn the result via the provided tool. "
         + "Fill every required field. No prose commentary."
+        + _language_directive()
     ).strip()
     messages: list[dict[str, Any]] = []
     if enriched:
@@ -620,6 +661,7 @@ async def generate_json(
         (system or "")
         + "\nRespond with valid JSON only. No prose, no markdown fences, "
         + "no chain-of-thought. Start with { or [."
+        + _language_directive()
     ).strip()
     messages: list[dict[str, Any]] = []
     if enriched:
